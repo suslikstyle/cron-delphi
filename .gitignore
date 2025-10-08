@@ -1,0 +1,17 @@
+**/bin/
+**/__history/
+**/__recovery/
+**/dcu/
+*.~*
+*.stat
+*.local
+*.identcache
+*.skincfg
+*.log
+*.exe
+*.dcu
+*.dres
+*.7z
+*.zip
+*.sig
+*.dsk

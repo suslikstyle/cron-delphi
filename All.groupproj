@@ -1,0 +1,48 @@
+﻿<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+    <PropertyGroup>
+        <ProjectGuid>{10C55983-0101-4ACA-AF17-5998CD1A93C3}</ProjectGuid>
+    </PropertyGroup>
+    <ItemGroup>
+        <Projects Include="CronTest.dproj">
+            <Dependencies/>
+        </Projects>
+        <Projects Include="Test\TestUnit.dproj">
+            <Dependencies/>
+        </Projects>
+    </ItemGroup>
+    <ProjectExtensions>
+        <Borland.Personality>Default.Personality.12</Borland.Personality>
+        <Borland.ProjectType/>
+        <BorlandProject>
+            <Default.Personality/>
+        </BorlandProject>
+    </ProjectExtensions>
+    <Target Name="CronTest">
+        <MSBuild Projects="CronTest.dproj"/>
+    </Target>
+    <Target Name="CronTest:Clean">
+        <MSBuild Projects="CronTest.dproj" Targets="Clean"/>
+    </Target>
+    <Target Name="CronTest:Make">
+        <MSBuild Projects="CronTest.dproj" Targets="Make"/>
+    </Target>
+    <Target Name="TestUnit">
+        <MSBuild Projects="Test\TestUnit.dproj"/>
+    </Target>
+    <Target Name="TestUnit:Clean">
+        <MSBuild Projects="Test\TestUnit.dproj" Targets="Clean"/>
+    </Target>
+    <Target Name="TestUnit:Make">
+        <MSBuild Projects="Test\TestUnit.dproj" Targets="Make"/>
+    </Target>
+    <Target Name="Build">
+        <CallTarget Targets="CronTest;TestUnit"/>
+    </Target>
+    <Target Name="Clean">
+        <CallTarget Targets="CronTest:Clean;TestUnit:Clean"/>
+    </Target>
+    <Target Name="Make">
+        <CallTarget Targets="CronTest:Make;TestUnit:Make"/>
+    </Target>
+    <Import Project="$(BDS)\Bin\CodeGear.Group.Targets" Condition="Exists('$(BDS)\Bin\CodeGear.Group.Targets')"/>
+</Project>
