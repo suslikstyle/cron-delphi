@@ -19,7 +19,7 @@ type
     mmoLog: TMemo;
     procedure FormCreate(Sender: TObject);
   private
-    Cron: TCronThread;
+    FCron: TCronThread;
   public
     { Public declarations }
   end;
@@ -33,8 +33,8 @@ implementation
 
 procedure TForm5.FormCreate(Sender: TObject);
 begin
-  Cron:= TCronThread.Create;
-  Cron.OnExecute:=
+  FCron:= TCronThread.Create();
+  FCron.OnExecute:=
     procedure(Sender: TObject; const TaskName: string)
     begin
       mmoLog.Lines.Add('['+TimeToStr(Now)+'] Выполнено: ' + TaskName);
@@ -43,9 +43,12 @@ begin
   // формат: минута час день_месяца месяц день_недели
   // * * * * * = каждую минуту
   // */5 * * * * = каждые 5 минут
-//  Cron.AddTask('Каждую минуту', '* * * * *');
-  Cron.AddTask('Каждый день утром и вечером', '59 7,19 * * *');
-//  Cron.AddTask('Каждый день в 7:59', '59 7 * * *');
+  FCron.AddTask('Каждую минуту', '* * * * *');
+  FCron.AddTask('Каждые 3 минуты', '*/3 * * * *');
+  FCron.AddTask('Каждые 5 минут', '*/5 * * * *');
+  FCron.AddTask('Каждый день в 22:00', '0 22 * * *');
+//  FCron.AddTask('Каждый день утром и вечером', '59 7,19 * * *');
+//  FCron.AddTask('Каждый день в 7:59', '59 7 * * *');
 end;
 
 end.

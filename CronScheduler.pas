@@ -3,6 +3,7 @@
 interface
 
 uses
+  Winapi.Windows,
   System.SysUtils,
   System.Classes,
   System.Generics.Collections,
@@ -27,11 +28,26 @@ type
   public
     constructor Create(const AName, ACronExpr: string);
     function GetNextTime(const FromTime: TDateTime): TDateTime;
+
+    // Публичные свойства (read-only) — они нужны для тестов
     property Name: string read FName;
     property CronExpr: string read FCronExpr;
     property NextTime: TDateTime read FNextTime write FNextTime;
+
+    property Minutes: TArray<Integer> read FMinutes;
+    property Hours: TArray<Integer> read FHours;
+    property Days: TArray<Integer> read FDays;
+    property Months: TArray<Integer> read FMonths;
+    property WeekDays: TArray<Integer> read FWeekDays;
+
+    property MinutesWild: Boolean read FMinutesWild;
+    property HoursWild: Boolean read FHoursWild;
+    property DaysWild: Boolean read FDaysWild;
+    property MonthsWild: Boolean read FMonthsWild;
+    property WeekDaysWild: Boolean read FWeekDaysWild;
   end;
 
+  // Использовать для привязки какого-либо события ко времени
   TCronThread = class(TThread)
   private
     FTasks: TObjectList<TCronTask>;
@@ -54,13 +70,14 @@ type
     property ToleranceSeconds: Integer read FToleranceSeconds write FToleranceSeconds;
   end;
 
+  function IntArrayContains(const Arr: TArray<Integer>; v: Integer): Boolean;
+
 implementation
 
 uses
   System.StrUtils;
 
-{ Вспомогательные функции }
-
+{$REGION 'Вспомогательные функции'}
 procedure AddUniqueInt(var Arr: TArray<Integer>; v: Integer);
 var
   i: Integer;
@@ -70,7 +87,6 @@ begin
   SetLength(Arr, Length(Arr)+1);
   Arr[High(Arr)] := v;
 end;
-
 function IntArrayContains(const Arr: TArray<Integer>; v: Integer): Boolean;
 var
   i: Integer;
@@ -79,7 +95,6 @@ begin
     if Arr[i] = v then Exit(True);
   Result := False;
 end;
-
 procedure SortUnique(var Arr: TArray<Integer>);
 var
   L: TList<Integer>;
@@ -98,8 +113,9 @@ begin
     L.Free;
   end;
 end;
+{$ENDREGION}
 
-{ === TCronTask === }
+{$REGION 'TCronTask'}
 constructor TCronTask.Create(const AName, ACronExpr: string);
 begin
   inherited Create;
@@ -236,9 +252,9 @@ begin
 
   raise Exception.Create('Cannot find next cron time within search window for: ' + FCronExpr);
 end;
+{$ENDREGION}
 
-{ === TCronThread === }
-
+{$REGION 'TCronThread'}
 constructor TCronThread.Create;
 begin
   inherited Create(False);
@@ -258,10 +274,8 @@ begin
   inherited;
 end;
 procedure TCronThread.AddTask(const AName, ACronExpr: string);
-var
-  T: TCronTask;
 begin
-  T := TCronTask.Create(AName, ACronExpr);
+  const T = TCronTask.Create(AName, ACronExpr);
   FLock.Enter;
   try
     FTasks.Add(T);
@@ -299,8 +313,17 @@ var
   i: Integer;
   TriggerTasks: TList<TCronTask>;
   scheduled, newNext: TDateTime;
-  tstr: string;
-  LProc: TThreadProcedure;
+  function getHandler(const AName: string):TThreadProcedure;
+  begin
+    Result:=
+      procedure()
+      begin
+        try
+          FOnExecute(Self, AName);
+        except
+        end
+      end;
+  end;
 begin
   Sleep(500);
   TriggerTasks:= nil;
@@ -336,14 +359,15 @@ begin
       FLock.Enter;
       try
         NowTime:= Now; // под блокировкой
-        for i:= 0 to FTasks.Count - 1 do begin
-          if FTasks[i].NextTime <= IncSecond(NowTime, FToleranceSeconds) then begin
-            scheduled:= FTasks[i].NextTime;
-            // пересчитываем NextTime сразу (от scheduled +1с) чтобы гарантированно двигаться вперёд
-            newNext:= FTasks[i].GetNextTime(IncSecond(scheduled, 1));
-            FTasks[i].NextTime:= newNext;
-
-            TriggerTasks.Add(FTasks[i]); // запомним для вызова вне блокировки
+        for var Task in FTasks do begin
+          if Abs(Task.NextTime - Now) * SecsPerDay < 0.5 then begin
+            Task.NextTime:= Task.GetNextTime(IncSecond(Now, 1));
+            if Assigned(FOnExecute) then begin
+              // Копируем имя задачи в локальную переменную, чтобы избежать замыкания по ссылке
+              var TaskName:= Task.Name;
+              OutputDebugString(PChar(TaskName));
+              TThread.Queue(nil, getHandler(TaskName));
+            end;
           end;
         end;
       finally
@@ -353,16 +377,16 @@ begin
       // вызывать обработчики вне блокировки
       for i:= 0 to TriggerTasks.Count - 1 do begin
         if Assigned(FOnExecute) then begin
-          tstr:= TriggerTasks[i].Name; // локальная копия
-          LProc:= procedure
-          begin
-            try
-              FOnExecute(Self, tstr);
-            except
-              // подавим исключения из пользовательского обработчика
+          const tstr = TriggerTasks[i].Name;
+          const _proc:TThreadProcedure =
+            procedure()
+            begin
+              try
+                FOnExecute(Self, tstr);
+              except
+              end
             end;
-          end;
-          TThread.Queue(nil, LProc);
+          TThread.Queue(nil, _proc);
         end;
       end;
       TriggerTasks.Free;
@@ -373,6 +397,7 @@ begin
     TriggerTasks.Free;
   end;
 end;
+{$ENDREGION}
 
 end.
 
