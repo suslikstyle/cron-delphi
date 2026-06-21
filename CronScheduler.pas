@@ -23,11 +23,12 @@ type
     FMinutesWild, FHoursWild, FDaysWild, FMonthsWild, FWeekDaysWild: Boolean;
     FNextTime: TDateTime;
     FIsOneTime: Boolean; // Флаг разовой задачи
+    FAction: TProc;      // Индивидуальный обработчик
     procedure ParseExpression;
     procedure ParseField(const Field: string; MinVal, MaxVal: Integer; out Values: TArray<Integer>; out IsWildcard: Boolean; IsDayOfWeek: Boolean = False);
     procedure ParseOneTimeExpression; // Парсер для +5m, +1h и т.д.
   public
-    constructor Create(const AName, ACronExpr: string);
+    constructor Create(const AName, ACronExpr: string; AAction: TProc = nil);
     function GetNextTime(const FromTime: TDateTime): TDateTime;
 
     // Публичные свойства (read-only) — они нужны для тестов
@@ -48,6 +49,7 @@ type
     property WeekDaysWild: Boolean read FWeekDaysWild;
 
     property IsOneTime: Boolean read FIsOneTime;
+    property Action: TProc read FAction;
   end;
 
   // Использовать для привязки какого-либо события ко времени
@@ -64,7 +66,7 @@ type
     constructor Create;
     destructor Destroy; override;
 
-    procedure AddTask(const AName, ACronExpr: string);
+    procedure AddTask(const AName, ACronExpr: string; AAction: TProc = nil);
     procedure ClearTasks;
     procedure Stop;
 
@@ -119,11 +121,12 @@ end;
 {$ENDREGION}
 
 {$REGION 'TCronTask'}
-constructor TCronTask.Create(const AName, ACronExpr: string);
+constructor TCronTask.Create(const AName, ACronExpr: string; AAction: TProc = nil);
 begin
   inherited Create;
   FName:= AName;
   FCronExpr:= Trim(ACronExpr);
+  FAction:= AAction;
 
   FIsOneTime:= FCronExpr.StartsWith('+');  // Если выражение начинается с '+', это разовая задача
 
@@ -324,9 +327,9 @@ begin
   FTasks.Free;
   inherited;
 end;
-procedure TCronThread.AddTask(const AName, ACronExpr: string);
+procedure TCronThread.AddTask(const AName, ACronExpr: string; AAction: TProc = nil);
 begin
-  const T = TCronTask.Create(AName, ACronExpr);
+  const T = TCronTask.Create(AName, ACronExpr, AAction);
   FLock.Enter;
   try
     FTasks.Add(T);
@@ -357,15 +360,37 @@ end;
 procedure TCronThread.Execute;
 const
   MAX_WAIT_MS = 60 * 60 * 1000;
+type
+  // Локальная структура для хранения данных о сработавшей задаче
+  TTriggerInfo = record
+    TaskName: string;
+    Action: TProc;
+  end;
+
+  function CreateThreadProc(const AName: string; const AAction: TProc): TThreadProcedure;
+  begin
+    Result:= procedure
+      begin
+        try
+          // Вызываем глобальное событие
+          if Assigned(FOnExecute) then FOnExecute(Self, AName);
+
+          // Вызываем индивидуальный метод задачи
+          if Assigned(AAction) then AAction();
+        except
+        end;
+      end;
+  end;
+
 var
   Soonest, NowTime: TDateTime;
   WaitMs: Cardinal;
   i: Integer;
-  TriggerNames: TList<string>; // Сохраняем только имена!
+  Triggers: TList<TTriggerInfo>;  // Храним и имя, и коллбэк
   Task: TCronTask;
 begin
   Sleep(500);
-  TriggerNames:= TList<string>.Create;
+  Triggers:= TList<TTriggerInfo>.Create;
   try
     while not Terminated do begin
       // Поиск ближайшей задачи
@@ -399,18 +424,20 @@ begin
       end;
 
       // Время пришло. Собираем задачи, которые нужно выполнить
-      TriggerNames.Clear;
+      Triggers.Clear;
       FLock.Enter;
       try
         NowTime:= Now;
-        // Идем с конца в начало, так как мы будем удалять элементы!
         for i:= FTasks.Count - 1 downto 0 do begin
           Task:= FTasks[i];
           if (Task.NextTime > 0) and (Task.NextTime <= NowTime) then begin
-            if SecondsBetween(NowTime, Task.NextTime) <= FToleranceSeconds then
-              TriggerNames.Add(Task.Name); // Сохраняем строку, объект нам вне блокировки не нужен
+            if SecondsBetween(NowTime, Task.NextTime) <= FToleranceSeconds then begin
+              var LInfo: TTriggerInfo;
+              LInfo.TaskName:= Task.Name;
+              LInfo.Action:= Task.Action;
+              Triggers.Add(LInfo); // Сохраняем имя и коллбэк
+            end;
             Task.NextTime:= Task.GetNextTime(NowTime);
-            // Если задача одноразовая, GetNextTime вернул 0. Смело очищаем память.
             if Task.NextTime = 0 then FTasks.Delete(i);
           end;
         end;
@@ -419,24 +446,16 @@ begin
       end;
 
       // Вызываем обработчики вне блокировки
-      for i:= 0 to TriggerNames.Count - 1 do begin
-        if Assigned(FOnExecute) then begin
-          var TaskName:= TriggerNames[i]; // Локальный захват для анонимной процедуры
-          TThread.Queue(nil,
-            procedure
-            begin
-              try
-                FOnExecute(Self, TaskName);
-              except
-              end;
-            end);
+      for i:= 0 to Triggers.Count - 1 do begin
+        if Assigned(FOnExecute) or Assigned(Triggers[i].Action) then begin
+          TThread.Queue(nil, CreateThreadProc(Triggers[i].TaskName, Triggers[i].Action));
         end;
       end;
 
       Sleep(1);
     end;
   finally
-    TriggerNames.Free;
+    Triggers.Free;
   end;
 end;
 {$ENDREGION}

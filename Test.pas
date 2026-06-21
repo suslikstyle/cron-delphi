@@ -48,8 +48,14 @@ begin
   FCron.AddTask('Каждые 3 минуты', '*/3 * * * *');
   FCron.AddTask('Каждые 5 минут', '*/5 * * * *');
   FCron.AddTask('Каждый день в 22:00', '0 22 * * *');
-//  FCron.AddTask('Каждый день утром и вечером', '59 7,19 * * *');
-//  FCron.AddTask('Каждый день в 7:59', '59 7 * * *');
+
+  // Одноразовая задача с отложенным действием
+  FCron.AddTask('Напоминание', '+15m',
+    procedure
+    begin
+      ShowMessage('Прошло 15 минут, пора размяться!');
+    end
+  );
 end;
 
 procedure TForm5.FormDestroy(Sender: TObject);
