@@ -21,6 +21,12 @@ type
     [Test] procedure NextTime_DayOfMonth_And_DayOfWeek;
     [Test] procedure NextTime_MonthTransition;
     [Test] procedure Parse_Comma_Separated;
+
+    [Test] procedure Parse_OneTime_Task;
+    [Test] procedure Parse_OneTime_Seconds;
+    [Test] procedure Parse_OneTime_Minutes;
+    [Test] procedure Parse_OneTime_Hours;
+    [Test] procedure NextTime_OneTime_ReturnsZero;
   end;
 
 implementation
@@ -179,6 +185,67 @@ begin
     T.Destroy;
   end;
 end;
+
+{$REGION 'Тесты разовых задач (One-time tasks)'}
+procedure TCronSchedulerTests.Parse_OneTime_Task;
+begin
+  const T1 = TCronTask.Create('test1', '+5m');
+  const T2 = TCronTask.Create('test2', '* * * * *');
+  try
+    Assert.IsTrue(T1.IsOneTime, 'Task with + should be marked as one-time');
+    Assert.IsFalse(T2.IsOneTime, 'Standard cron task should not be one-time');
+  finally
+    T1.Free;
+    T2.Free;
+  end;
+end;
+procedure TCronSchedulerTests.Parse_OneTime_Seconds;
+var
+  Expected: TDateTime;
+begin
+  Expected:= IncSecond(Now, 45); // +45s
+  const T = TCronTask.Create('test', '+45s');
+  try
+    // Допускаем погрешность в 1 секунду из-за времени выполнения самого теста
+    Assert.IsTrue(SecondsBetween(Expected, T.NextTime) <= 1, 'NextTime should be ~45 seconds from Now');
+  finally
+    T.Free;
+  end;
+end;
+procedure TCronSchedulerTests.Parse_OneTime_Minutes;
+var
+  Expected: TDateTime;
+begin
+  Expected:= IncMinute(Now, 15); // +15m
+  const T = TCronTask.Create('test', '+15m');
+  try
+    Assert.IsTrue(SecondsBetween(Expected, T.NextTime) <= 1, 'NextTime should be ~15 minutes from Now');
+  finally
+    T.Free;
+  end;
+end;
+procedure TCronSchedulerTests.Parse_OneTime_Hours;
+var
+  Expected: TDateTime;
+begin
+  Expected:= IncHour(Now, 2); // +2h
+  const T = TCronTask.Create('test', '+2h');
+  try
+    Assert.IsTrue(SecondsBetween(Expected, T.NextTime) <= 1, 'NextTime should be ~2 hours from Now');
+  finally
+    T.Free;
+  end;
+end;
+procedure TCronSchedulerTests.NextTime_OneTime_ReturnsZero;
+begin
+  const T = TCronTask.Create('test', '+1m');
+  try
+    Assert.AreEqual(TDateTime(0), T.GetNextTime(Now), 'GetNextTime must return 0 for completed one-time tasks');
+  finally
+    T.Free;
+  end;
+end;
+{$ENDREGION}
 
 
 initialization
