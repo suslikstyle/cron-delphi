@@ -219,35 +219,50 @@ begin
   if TryDt <= FromTime then
     TryDt:= IncMinute(TryDt, 1);
 
-  // ограничение поиска (например, 5 лет)
-  LimitDt := IncYear(FromTime, 5);
+  // ограничение поиска
+  LimitDt:= IncYear(FromTime, 5);
 
-  domSpecified := not FDaysWild;
-  dowSpecified := not FWeekDaysWild;
+  domSpecified:= not FDaysWild;
+  dowSpecified:= not FWeekDaysWild;
 
-  while TryDt <= LimitDt do
-  begin
+  while TryDt <= LimitDt do begin
     DecodeDateTime(TryDt, Y, Mo, D, H, Mi, S, MSec);
 
-    monthMatch := FMonthsWild or IntArrayContains(FMonths, Mo);
-    hourMatch := FHoursWild or IntArrayContains(FHours, H);
-    minuteMatch := FMinutesWild or IntArrayContains(FMinutes, Mi);
+    // Быстрый перескок месяцев
+    monthMatch:= FMonthsWild or IntArrayContains(FMonths, Mo);
+    if not monthMatch then begin
+      TryDt:= StartOfTheMonth(IncMonth(TryDt, 1));
+      Continue;
+    end;
 
-    // cron: если указаны и DOM и DOW -> срабатывает при совпадении либо DOM либо DOW
-    dow := DayOfWeek(TryDt) - 1; // DayOfWeek 1..7 -> convert to 0..6 (0 = Sunday)
+    // Быстрый перескок дней
+    dow:= DayOfWeek(TryDt) - 1;
     if (not domSpecified) and (not dowSpecified) then
-      dayMatch := True
+      dayMatch:= True
     else if domSpecified and dowSpecified then
-      dayMatch := IntArrayContains(FDays, D) or IntArrayContains(FWeekDays, dow)
+      dayMatch:= IntArrayContains(FDays, D) or IntArrayContains(FWeekDays, dow)
     else if domSpecified then
-      dayMatch := IntArrayContains(FDays, D)
-    else
-      dayMatch := IntArrayContains(FWeekDays, dow);
+      dayMatch:= IntArrayContains(FDays, D)
+    else dayMatch:= IntArrayContains(FWeekDays, dow);
 
-    if monthMatch and hourMatch and minuteMatch and dayMatch then
-      Exit(TryDt);
+    if not dayMatch then begin
+      TryDt:= StartOfTheDay(IncDay(TryDt, 1));
+      Continue;
+    end;
 
-    TryDt := IncMinute(TryDt, 1);
+    // Быстрый перескок часов
+    hourMatch:= FHoursWild or IntArrayContains(FHours, H);
+    if not hourMatch then begin
+      TryDt:= RecodeMinute(TryDt, 0); // Обнуляем минуты
+      TryDt:= IncHour(TryDt, 1);
+      Continue;
+    end;
+
+    // Если все совпало
+    minuteMatch:= FMinutesWild or IntArrayContains(FMinutes, Mi);
+    if minuteMatch then Exit(TryDt);
+
+    TryDt:= IncMinute(TryDt, 1);
   end;
 
   raise Exception.Create('Cannot find next cron time within search window for: ' + FCronExpr);
@@ -307,91 +322,80 @@ procedure TCronThread.Execute;
 const
   MAX_WAIT_MS = 60 * 60 * 1000;
 var
-  Soonest: TDateTime;
-  NowTime: TDateTime;
+  Soonest, NowTime: TDateTime;
   WaitMs: Cardinal;
-  i: Integer;
   TriggerTasks: TList<TCronTask>;
-  scheduled, newNext: TDateTime;
-  function getHandler(const AName: string):TThreadProcedure;
-  begin
-    Result:=
-      procedure()
-      begin
-        try
-          FOnExecute(Self, AName);
-        except
-        end
-      end;
-  end;
+  Task: TCronTask;
 begin
   Sleep(500);
-  TriggerTasks:= nil;
+  TriggerTasks := TList<TCronTask>.Create;
   try
     while not Terminated do begin
-      // найти ближайшую задачу
+      // Поиск ближайшей задачи
       FLock.Enter;
       try
         Soonest:= 0;
-        for i:= 0 to FTasks.Count - 1 do
-          if (Soonest = 0) or (FTasks[i].NextTime < Soonest) then
-            Soonest:= FTasks[i].NextTime;
+        for Task in FTasks do
+          if (Soonest = 0) or (Task.NextTime < Soonest) then
+            Soonest:= Task.NextTime;
       finally
         FLock.Leave;
       end;
 
+      // Если задач нет спим до добавления
       if Soonest = 0 then begin
         FEvent.WaitFor(INFINITE);
         Continue;
       end;
 
       NowTime:= Now;
+
+      // Если время еще не пришло - ждем
       if Soonest > NowTime then begin
-        WaitMs:= Round((Soonest - NowTime) * MSecsPerDay);
+        WaitMs:= Round((Soonest-NowTime) * MSecsPerDay);
         if WaitMs = 0 then WaitMs:= 1;
         if WaitMs > MAX_WAIT_MS then WaitMs:= MAX_WAIT_MS;
         FEvent.WaitFor(WaitMs);
         Continue;
       end;
 
-      // собираем задачи, которые должны сработать (<= Now + tolerance)
-      TriggerTasks:= TList<TCronTask>.Create;
+      // Время пришло. Собираем задачи, которые нужно выполнить
+      TriggerTasks.Clear;
       FLock.Enter;
       try
-        NowTime:= Now; // под блокировкой
-        for var Task in FTasks do begin
-          if Abs(Task.NextTime - Now) * SecsPerDay < 0.5 then begin
-            Task.NextTime:= Task.GetNextTime(IncSecond(Now, 1));
-            if Assigned(FOnExecute) then begin
-              // Копируем имя задачи в локальную переменную, чтобы избежать замыкания по ссылке
-              var TaskName:= Task.Name;
-              OutputDebugString(PChar(TaskName));
-              TThread.Queue(nil, getHandler(TaskName));
-            end;
+        NowTime:= Now;
+        for Task in FTasks do begin
+          // Если время задачи в прошлом или сейчас
+          if Task.NextTime <= NowTime then begin
+
+            // Если мы проспали не дольше, чем разрешено толерантностью
+            if SecondsBetween(NowTime, Task.NextTime) <= FToleranceSeconds then
+              TriggerTasks.Add(Task);
+
+            // Вычисляем следующее время от текущего момента, чтобы предотвратить бесконечный цикл застревания в прошлом
+            Task.NextTime:= Task.GetNextTime(NowTime);
           end;
         end;
       finally
         FLock.Leave;
       end;
 
-      // вызывать обработчики вне блокировки
-      for i:= 0 to TriggerTasks.Count - 1 do begin
+      // Вызов событий вне блокировки (чтобы не тормозить AddTask)
+      for Task in TriggerTasks do begin
         if Assigned(FOnExecute) then begin
-          const tstr = TriggerTasks[i].Name;
-          const _proc:TThreadProcedure =
-            procedure()
+          var TaskName:= Task.Name; // Локальный захват переменной для анонимного потока
+
+          TThread.Queue(nil,
+            procedure
             begin
               try
-                FOnExecute(Self, tstr);
+                FOnExecute(Self, TaskName);
               except
-              end
-            end;
-          TThread.Queue(nil, _proc);
+              end;
+            end);
         end;
       end;
-      TriggerTasks.Free;
-      TriggerTasks:= nil;
-      Sleep(1);
+
     end;
   finally
     TriggerTasks.Free;

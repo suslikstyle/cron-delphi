@@ -11,6 +11,7 @@ object Form5: TForm5
   Font.Name = 'Segoe UI'
   Font.Style = []
   OnCreate = FormCreate
+  OnDestroy = FormDestroy
   TextHeight = 15
   object mmoLog: TMemo
     Left = 0
